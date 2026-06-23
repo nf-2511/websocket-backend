@@ -3,7 +3,7 @@ const app = express();
 const http = require('http');
 const server = http.createServer(app);
 const { Server } = require("socket.io");
-
+const cors = require('cors');
 
 // WIFI
 // 89.0.142.86 - MAN ( BACKEND ) // HTTP // LOCALHOST
