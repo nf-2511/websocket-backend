@@ -20,6 +20,9 @@ const { sendOTPEmail } = require('./services/emailService');
 // In-memory OTP store: email -> { code, expiresAt }
 const otpStore = new Map();
 
+// userId -> socketId mapping for real-time DM notifications
+const userSocketMap = new Map();
+
 // cors websocket settings
 const io = new Server(server, {
     cors: {
@@ -37,6 +40,22 @@ connectDB();
 // socket.io
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
+
+    // Register user socket for real-time DM notifications
+    socket.on('user:online', ({ userId }) => {
+        userSocketMap.set(String(userId), socket.id);
+    });
+
+    // Fetch current user's chats (populated)
+    socket.on('user:get-chats', async ({ userId }) => {
+        try {
+            const user = await User.findById(userId).populate('chats', '_id firstName lastName email');
+            socket.emit('chats:list', user?.chats || []);
+        } catch (error) {
+            console.error('user:get-chats error:', error);
+            socket.emit('chats:list', []);
+        }
+    });
 
     // Check if email exists in DB
     socket.on('auth:check-email', async ({ email }) => {
@@ -114,13 +133,52 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Search users by name or email
+    socket.on('users:search', async ({ query, userId }) => {
+        if (!query || query.trim().length < 1) {
+            socket.emit('users:search-result', []);
+            return;
+        }
+        try {
+            const regex = new RegExp(query.trim(), 'i');
+            const filter = {
+                $or: [
+                    { firstName: regex },
+                    { lastName: regex },
+                    { email: regex },
+                ],
+            };
+            if (userId) filter._id = { $ne: userId };
+            const users = await User.find(filter).select('_id firstName lastName email age').limit(20);
+            socket.emit('users:search-result', users);
+        } catch (error) {
+            console.error('users:search error:', error);
+            socket.emit('users:search-result', []);
+        }
+    });
+
     // Send message to a room
-    socket.on('message:send', ({ roomId, text, senderId }) => {
+    socket.on('message:send', async ({ roomId, text, senderId, receiverId }) => {
         socket.to(roomId).emit('message:receive', {
             text,
             senderId,
             timestamp: new Date(),
         });
+
+        if (senderId && receiverId) {
+            try {
+                await User.findByIdAndUpdate(senderId, { $addToSet: { chats: receiverId } });
+                await User.findByIdAndUpdate(receiverId, { $addToSet: { chats: senderId } });
+
+                const sender = await User.findById(senderId).select('_id firstName lastName email');
+                const receiverSocketId = userSocketMap.get(String(receiverId));
+                if (receiverSocketId) {
+                    io.to(receiverSocketId).emit('chats:new-contact', sender);
+                }
+            } catch (error) {
+                console.error('message:send chats update error:', error);
+            }
+        }
     });
 
     // Join a room
@@ -130,6 +188,9 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
+        for (const [uid, sid] of userSocketMap.entries()) {
+            if (sid === socket.id) { userSocketMap.delete(uid); break; }
+        }
         console.log('User disconnected:', socket.id);
     });
 });

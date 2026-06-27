@@ -18,11 +18,20 @@ const userSchema = new mongoose.Schema({
         type: Date,
         required: true,
     },
-    createdAt: {
-        type: Date,
-        default: Date.now,
+    age: {
+        type: Number,
     },
-});
+    contacts: {
+        type: [mongoose.Schema.Types.ObjectId],
+        ref: 'User',
+        default: [],
+    },
+    chats: {
+        type: [mongoose.Schema.Types.ObjectId],
+        ref: 'User',
+        default: [],
+    },
+}, { timestamps: true });
 
 const User = mongoose.model('User', userSchema);
 
