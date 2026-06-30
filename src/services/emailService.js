@@ -1,24 +1,17 @@
-const nodemailer = require('nodemailer');
-require('dotenv').config();
+const { Resend } = require('resend');
 
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_APP_PASSWORD,
-    },
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 async function sendOTPEmail(toEmail, code) {
-    const mailOptions = {
-        from: `"MARS CHAT 🔴" <${process.env.GMAIL_USER}>`,
-        to: toEmail,
-        subject: '🔴 MARS CHAT — Your Access Code',
+    await resend.emails.send({
+        from: 'MARS CHAT <onboarding@resend.dev>',
+        to: [toEmail],
+        subject: 'MARS CHAT — Your Access Code',
         html: `
         <div style="background:#020408;padding:40px;font-family:monospace;border:1px solid #00f5ff33;">
             <div style="text-align:center;margin-bottom:30px;">
                 <h1 style="color:#00f5ff;font-size:28px;letter-spacing:4px;text-shadow:0 0 10px #00f5ff;">
-                    🔴 MARS CHAT
+                    MARS CHAT
                 </h1>
                 <p style="color:#00f5ff88;font-size:12px;letter-spacing:2px;">SECURE TRANSMISSION</p>
             </div>
@@ -30,7 +23,7 @@ async function sendOTPEmail(toEmail, code) {
                     </span>
                 </div>
                 <p style="color:#607080;margin-top:20px;font-size:12px;">
-                    ⏱ Expires in 5 minutes
+                    Expires in 5 minutes
                 </p>
             </div>
             <p style="color:#304050;text-align:center;margin-top:20px;font-size:11px;">
@@ -38,9 +31,7 @@ async function sendOTPEmail(toEmail, code) {
             </p>
         </div>
         `,
-    };
-
-    await transporter.sendMail(mailOptions);
+    });
 }
 
 module.exports = { sendOTPEmail };
