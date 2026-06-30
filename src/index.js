@@ -74,8 +74,9 @@ io.on('connection', (socket) => {
                 const expiresAt = Date.now() + 5 * 60 * 1000;
                 otpStore.set(email, { code, expiresAt });
 
+                console.log(`[OTP] Generated ${code} for ${email}`);
                 socket.emit('auth:otp-sent', { message: 'Code sent to your email' });
-                sendOTPEmail(email, code).catch((err) => console.error('Email send failed:', err));
+                sendOTPEmail(email, code).catch((err) => console.error('[OTP] Email send failed:', err));
             } else {
                 socket.emit('auth:register-required');
             }
@@ -95,8 +96,9 @@ io.on('connection', (socket) => {
             const expiresAt = Date.now() + 5 * 60 * 1000;
             otpStore.set(email, { code, expiresAt });
 
+            console.log(`[OTP] Generated ${code} for new user ${email}`);
             socket.emit('auth:otp-sent', { message: 'Account created! Code sent' });
-            sendOTPEmail(email, code).catch((err) => console.error('Email send failed:', err));
+            sendOTPEmail(email, code).catch((err) => console.error('[OTP] Email send failed:', err));
         } catch (error) {
             console.error('auth:register error:', error);
             socket.emit('auth:error', { message: 'Registration failed' });
