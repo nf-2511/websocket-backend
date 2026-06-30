@@ -30,6 +30,10 @@ const io = new Server(server, {
         methods: ['GET', 'POST'],
         credentials: false,
     },
+    pingInterval: 10000,
+    pingTimeout: 5000,
+    upgradeTimeout: 10000,
+    transports: ['polling'],
 });
 
 // SETTINGS
