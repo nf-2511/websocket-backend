@@ -58,7 +58,7 @@ app.use(cors({ origin: '*' }));
 
 // Health check for Render / uptime monitors
 app.get('/', (req, res) => {
-    res.json({ status: 'ok', service: 'mars-chat-backend' });
+    res.json({ status: 'ok', service: 'mars-chat-backend', rev: 2 });
 });
 
 // Connect to MongoDB
@@ -103,8 +103,14 @@ io.on('connection', (socket) => {
                 otpStore.set(email, { code, expiresAt, attempts: 0 });
 
                 console.log(`[OTP] Code generated for ${email}`);
-                socket.emit('auth:otp-sent', { message: 'Code sent to your email' });
-                sendOTPEmail(email, code).catch((err) => console.error('[OTP] Email send failed:', err));
+                try {
+                    await sendOTPEmail(email, code);
+                    socket.emit('auth:otp-sent', { message: 'Code sent to your email' });
+                } catch (err) {
+                    console.error('[OTP] Email send failed:', err);
+                    otpStore.delete(email);
+                    socket.emit('auth:error', { message: `Email delivery failed: ${err.message}` });
+                }
             } else {
                 socket.emit('auth:register-required');
             }
@@ -130,8 +136,14 @@ io.on('connection', (socket) => {
             otpStore.set(email, { code, expiresAt, attempts: 0 });
 
             console.log(`[OTP] Code generated for new user ${email}`);
-            socket.emit('auth:otp-sent', { message: 'Account created! Code sent' });
-            sendOTPEmail(email, code).catch((err) => console.error('[OTP] Email send failed:', err));
+            try {
+                await sendOTPEmail(email, code);
+                socket.emit('auth:otp-sent', { message: 'Account created! Code sent' });
+            } catch (err) {
+                console.error('[OTP] Email send failed:', err);
+                otpStore.delete(email);
+                socket.emit('auth:error', { message: `Email delivery failed: ${err.message}` });
+            }
         } catch (error) {
             console.error('auth:register error:', error);
             socket.emit('auth:error', { message: 'Registration failed' });
