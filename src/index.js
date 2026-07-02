@@ -70,7 +70,7 @@ app.use(cors({ origin: '*' }));
 
 // Health check for Render / uptime monitors
 app.get('/', (req, res) => {
-    res.json({ status: 'ok', service: 'mars-chat-backend', rev: 4 });
+    res.json({ status: 'ok', service: 'mars-chat-backend', rev: 5 });
 });
 
 // Connect to MongoDB
@@ -290,10 +290,19 @@ io.on('connection', (socket) => {
                 await User.findByIdAndUpdate(senderId, { $addToSet: { chats: receiverId } });
                 await User.findByIdAndUpdate(receiverId, { $addToSet: { chats: senderId } });
 
-                const sender = await User.findById(senderId).select('_id firstName lastName email');
+                const [sender, receiver] = await Promise.all([
+                    User.findById(senderId).select('_id firstName lastName email'),
+                    User.findById(receiverId).select('_id firstName lastName email'),
+                ]);
+
+                // Receiver's sidebar (if online) gets the sender as a new contact
                 const receiverSocketId = userSocketMap.get(String(receiverId));
-                if (receiverSocketId) {
+                if (receiverSocketId && sender) {
                     io.to(receiverSocketId).emit('chats:new-contact', sender);
+                }
+                // Sender's own sidebar gets the receiver immediately too
+                if (receiver) {
+                    socket.emit('chats:new-contact', receiver);
                 }
             } catch (error) {
                 console.error('message:send chats update error:', error);
