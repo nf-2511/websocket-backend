@@ -58,7 +58,7 @@ app.use(cors({ origin: '*' }));
 
 // Health check for Render / uptime monitors
 app.get('/', (req, res) => {
-    res.json({ status: 'ok', service: 'mars-chat-backend', rev: 2 });
+    res.json({ status: 'ok', service: 'mars-chat-backend', rev: 3 });
 });
 
 // Connect to MongoDB
@@ -79,7 +79,13 @@ io.on('connection', (socket) => {
         if (!userId) { socket.emit('chats:list', []); return; }
         try {
             const user = await User.findById(userId).populate('chats', '_id firstName lastName email');
-            socket.emit('chats:list', user?.chats || []);
+            // Own account must not appear in the chat list
+            const chats = (user?.chats || []).filter((c) => String(c._id) !== String(userId));
+            if (user && chats.length !== user.chats.length) {
+                // lazy cleanup of self-references left by the old code
+                User.updateOne({ _id: userId }, { $pull: { chats: userId } }).catch(() => {});
+            }
+            socket.emit('chats:list', chats);
         } catch (error) {
             console.error('user:get-chats error:', error);
             socket.emit('chats:list', []);
@@ -230,7 +236,7 @@ io.on('connection', (socket) => {
             timestamp: new Date(),
         });
 
-        if (senderId && receiverId) {
+        if (senderId && receiverId && String(senderId) !== String(receiverId)) {
             try {
                 await User.findByIdAndUpdate(senderId, { $addToSet: { chats: receiverId } });
                 await User.findByIdAndUpdate(receiverId, { $addToSet: { chats: senderId } });
