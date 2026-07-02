@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const express = require('express');
 const app = express();
 const http = require('http');
@@ -17,8 +18,23 @@ const { sendOTPEmail } = require('./services/emailService');
 // 237.84.2.173 - Aziz (FRONT)
 // 237.84.2.22 - Ali ( FRONT )
 
-// In-memory OTP store: email -> { code, expiresAt }
+// In-memory OTP store: email -> { code, expiresAt, attempts }
 const otpStore = new Map();
+const OTP_MAX_ATTEMPTS = 5;
+
+// Purge expired OTP entries so the map doesn't grow forever
+setInterval(() => {
+    const now = Date.now();
+    for (const [email, record] of otpStore.entries()) {
+        if (now > record.expiresAt) otpStore.delete(email);
+    }
+}, 60 * 1000);
+
+const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
+const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const generateOTP = () => crypto.randomInt(10000, 100000);
+
+process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));
 
 // userId -> socketId mapping for real-time DM notifications
 const userSocketMap = new Map();
@@ -33,12 +49,17 @@ const io = new Server(server, {
     pingInterval: 10000,
     pingTimeout: 5000,
     upgradeTimeout: 10000,
-    transports: ['polling'],
+    transports: ['polling', 'websocket'],
 });
 
 // SETTINGS
 app.use(express.json());
 app.use(cors({ origin: '*' }));
+
+// Health check for Render / uptime monitors
+app.get('/', (req, res) => {
+    res.json({ status: 'ok', service: 'mars-chat-backend' });
+});
 
 // Connect to MongoDB
 connectDB();
@@ -48,12 +69,14 @@ io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
 
     // Register user socket for real-time DM notifications
-    socket.on('user:online', ({ userId }) => {
+    socket.on('user:online', ({ userId } = {}) => {
+        if (!userId) return;
         userSocketMap.set(String(userId), socket.id);
     });
 
     // Fetch current user's chats (populated)
-    socket.on('user:get-chats', async ({ userId }) => {
+    socket.on('user:get-chats', async ({ userId } = {}) => {
+        if (!userId) { socket.emit('chats:list', []); return; }
         try {
             const user = await User.findById(userId).populate('chats', '_id firstName lastName email');
             socket.emit('chats:list', user?.chats || []);
@@ -64,7 +87,8 @@ io.on('connection', (socket) => {
     });
 
     // Check if email exists in DB
-    socket.on('auth:check-email', async ({ email }) => {
+    socket.on('auth:check-email', async (payload) => {
+        const email = normalizeEmail(payload?.email);
         if (!email || !email.endsWith('@gmail.com')) {
             socket.emit('auth:error', { message: 'Only @gmail.com emails are allowed' });
             return;
@@ -74,11 +98,11 @@ io.on('connection', (socket) => {
             const user = await User.findOne({ email });
 
             if (user) {
-                const code = Math.floor(10000 + Math.random() * 90000);
+                const code = generateOTP();
                 const expiresAt = Date.now() + 5 * 60 * 1000;
-                otpStore.set(email, { code, expiresAt });
+                otpStore.set(email, { code, expiresAt, attempts: 0 });
 
-                console.log(`[OTP] Generated ${code} for ${email}`);
+                console.log(`[OTP] Code generated for ${email}`);
                 socket.emit('auth:otp-sent', { message: 'Code sent to your email' });
                 sendOTPEmail(email, code).catch((err) => console.error('[OTP] Email send failed:', err));
             } else {
@@ -91,16 +115,21 @@ io.on('connection', (socket) => {
     });
 
     // Register new user
-    socket.on('auth:register', async ({ email, firstName, lastName, birthDate }) => {
+    socket.on('auth:register', async ({ email, firstName, lastName, birthDate } = {}) => {
+        email = normalizeEmail(email);
+        if (!email.endsWith('@gmail.com')) {
+            socket.emit('auth:error', { message: 'Only @gmail.com emails are allowed' });
+            return;
+        }
         try {
             const newUser = new User({ email, firstName, lastName, birthDate });
             await newUser.save();
 
-            const code = Math.floor(10000 + Math.random() * 90000);
+            const code = generateOTP();
             const expiresAt = Date.now() + 5 * 60 * 1000;
-            otpStore.set(email, { code, expiresAt });
+            otpStore.set(email, { code, expiresAt, attempts: 0 });
 
-            console.log(`[OTP] Generated ${code} for new user ${email}`);
+            console.log(`[OTP] Code generated for new user ${email}`);
             socket.emit('auth:otp-sent', { message: 'Account created! Code sent' });
             sendOTPEmail(email, code).catch((err) => console.error('[OTP] Email send failed:', err));
         } catch (error) {
@@ -110,21 +139,35 @@ io.on('connection', (socket) => {
     });
 
     // Verify OTP code
-    socket.on('auth:verify-otp', async ({ email, code }) => {
+    socket.on('auth:verify-otp', async (payload) => {
+        const email = normalizeEmail(payload?.email);
+        const code = payload?.code;
         const record = otpStore.get(email);
 
         if (!record || Date.now() > record.expiresAt) {
+            otpStore.delete(email);
             socket.emit('auth:error', { message: 'Code expired or invalid' });
             return;
         }
 
-        if (String(record.code) !== String(code)) {
+        if (String(record.code) !== String(code).trim()) {
+            record.attempts += 1;
+            if (record.attempts >= OTP_MAX_ATTEMPTS) {
+                otpStore.delete(email);
+                socket.emit('auth:error', { message: 'Too many wrong attempts. Request a new code' });
+                return;
+            }
             socket.emit('auth:error', { message: 'Wrong code' });
             return;
         }
 
         try {
             const user = await User.findOne({ email });
+
+            if (!user) {
+                socket.emit('auth:error', { message: 'User not found. Please register' });
+                return;
+            }
             otpStore.delete(email);
 
             socket.emit('auth:success', {
@@ -142,13 +185,13 @@ io.on('connection', (socket) => {
     });
 
     // Search users by name or email
-    socket.on('users:search', async ({ query, userId }) => {
+    socket.on('users:search', async ({ query, userId } = {}) => {
         if (!query || query.trim().length < 1) {
             socket.emit('users:search-result', []);
             return;
         }
         try {
-            const regex = new RegExp(query.trim(), 'i');
+            const regex = new RegExp(escapeRegex(query.trim()), 'i');
             const filter = {
                 $or: [
                     { firstName: regex },
@@ -166,8 +209,10 @@ io.on('connection', (socket) => {
     });
 
     // Send message to a room
-    socket.on('message:send', async ({ roomId, text, senderId, receiverId }) => {
+    socket.on('message:send', async ({ roomId, text, senderId, receiverId } = {}) => {
+        if (!roomId || !text) return;
         socket.to(roomId).emit('message:receive', {
+            roomId,
             text,
             senderId,
             timestamp: new Date(),
@@ -190,9 +235,16 @@ io.on('connection', (socket) => {
     });
 
     // Join a room
-    socket.on('room:join', ({ roomId }) => {
+    socket.on('room:join', ({ roomId } = {}) => {
+        if (!roomId) return;
         socket.join(roomId);
         console.log(`Socket ${socket.id} joined room: ${roomId}`);
+    });
+
+    // Leave a room (chat switch on the client)
+    socket.on('room:leave', ({ roomId } = {}) => {
+        if (!roomId) return;
+        socket.leave(roomId);
     });
 
     socket.on('disconnect', () => {

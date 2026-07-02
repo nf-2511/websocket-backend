@@ -1,9 +1,17 @@
 const { Resend } = require('resend');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let resend = null;
+function getResend() {
+    if (!process.env.RESEND_API_KEY) {
+        throw new Error('RESEND_API_KEY env var is not set');
+    }
+    if (!resend) resend = new Resend(process.env.RESEND_API_KEY);
+    return resend;
+}
 
 async function sendOTPEmail(toEmail, code) {
-    await resend.emails.send({
+    // resend.emails.send resolves with { data, error } instead of rejecting
+    const { error } = await getResend().emails.send({
         from: 'MARS CHAT <onboarding@resend.dev>',
         to: [toEmail],
         subject: 'MARS CHAT — Your Access Code',
@@ -32,6 +40,9 @@ async function sendOTPEmail(toEmail, code) {
         </div>
         `,
     });
+    if (error) {
+        throw new Error(`Resend error: ${error.message || JSON.stringify(error)}`);
+    }
 }
 
 module.exports = { sendOTPEmail };

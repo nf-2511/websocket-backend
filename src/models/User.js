@@ -5,6 +5,8 @@ const userSchema = new mongoose.Schema({
         type: String,
         required: true,
         unique: true,
+        lowercase: true,
+        trim: true,
     },
     firstName: {
         type: String,
@@ -32,6 +34,13 @@ const userSchema = new mongoose.Schema({
         default: [],
     },
 }, { timestamps: true });
+
+// Keep age in sync with birthDate
+userSchema.pre('save', function () {
+    if (this.birthDate) {
+        this.age = Math.floor((Date.now() - this.birthDate.getTime()) / 3.15576e10);
+    }
+});
 
 const User = mongoose.model('User', userSchema);
 

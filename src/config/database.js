@@ -1,8 +1,11 @@
 const mongoose = require('mongoose');
 
-const MONGO_URL = 'mongodb+srv://Bekzod:6862442@cluster0.vssewsn.mongodb.net/chat?appName=Cluster0';
-
 async function connectDB() {
+    const MONGO_URL = process.env.MONGODB_URI;
+    if (!MONGO_URL) {
+        console.error('MONGODB_URI env var is not set');
+        process.exit(1);
+    }
     try {
         await mongoose.connect(MONGO_URL);
         console.log('MongoDB connected successfully');
