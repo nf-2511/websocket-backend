@@ -34,6 +34,18 @@ const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const generateOTP = () => crypto.randomInt(10000, 100000);
 
+const hashPassword = (password) => {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+    return `${salt}:${hash}`;
+};
+const verifyPassword = (password, stored) => {
+    const [salt, hash] = String(stored).split(':');
+    if (!salt || !hash) return false;
+    const test = crypto.scryptSync(password, salt, 64);
+    return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), test);
+};
+
 process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));
 
 // userId -> socketId mapping for real-time DM notifications
@@ -58,7 +70,7 @@ app.use(cors({ origin: '*' }));
 
 // Health check for Render / uptime monitors
 app.get('/', (req, res) => {
-    res.json({ status: 'ok', service: 'mars-chat-backend', rev: 3 });
+    res.json({ status: 'ok', service: 'mars-chat-backend', rev: 4 });
 });
 
 // Connect to MongoDB
@@ -101,9 +113,12 @@ io.on('connection', (socket) => {
         }
 
         try {
-            const user = await User.findOne({ email });
+            const user = await User.findOne({ email }).select('+password');
 
-            if (user) {
+            if (user && user.password) {
+                // Account uses password auth — no email needed
+                socket.emit('auth:password-required');
+            } else if (user) {
                 const code = generateOTP();
                 const expiresAt = Date.now() + 5 * 60 * 1000;
                 otpStore.set(email, { code, expiresAt, attempts: 0 });
@@ -127,32 +142,66 @@ io.on('connection', (socket) => {
     });
 
     // Register new user
-    socket.on('auth:register', async ({ email, firstName, lastName, birthDate } = {}) => {
+    // Register new user with a password — no email verification needed
+    socket.on('auth:register', async ({ email, firstName, lastName, birthDate, password } = {}) => {
         email = normalizeEmail(email);
         if (!email.endsWith('@gmail.com')) {
             socket.emit('auth:error', { message: 'Only @gmail.com emails are allowed' });
             return;
         }
+        if (!password || String(password).length < 6) {
+            socket.emit('auth:error', { message: 'Password must be at least 6 characters' });
+            return;
+        }
         try {
-            const newUser = new User({ email, firstName, lastName, birthDate });
+            const newUser = new User({
+                email,
+                firstName,
+                lastName,
+                birthDate,
+                password: hashPassword(String(password)),
+            });
             await newUser.save();
 
-            const code = generateOTP();
-            const expiresAt = Date.now() + 5 * 60 * 1000;
-            otpStore.set(email, { code, expiresAt, attempts: 0 });
-
-            console.log(`[OTP] Code generated for new user ${email}`);
-            try {
-                await sendOTPEmail(email, code);
-                socket.emit('auth:otp-sent', { message: 'Account created! Code sent' });
-            } catch (err) {
-                console.error('[OTP] Email send failed:', err);
-                otpStore.delete(email);
-                socket.emit('auth:error', { message: `Email delivery failed: ${err.message}` });
-            }
+            socket.emit('auth:success', {
+                user: {
+                    _id: newUser._id,
+                    email: newUser.email,
+                    firstName: newUser.firstName,
+                    lastName: newUser.lastName,
+                },
+            });
         } catch (error) {
             console.error('auth:register error:', error);
-            socket.emit('auth:error', { message: 'Registration failed' });
+            const message = error?.code === 11000 ? 'Email already registered' : 'Registration failed';
+            socket.emit('auth:error', { message });
+        }
+    });
+
+    // Login with email + password
+    socket.on('auth:login', async ({ email, password } = {}) => {
+        email = normalizeEmail(email);
+        if (!email || !password) {
+            socket.emit('auth:error', { message: 'Email and password are required' });
+            return;
+        }
+        try {
+            const user = await User.findOne({ email }).select('+password');
+            if (!user || !user.password || !verifyPassword(String(password), user.password)) {
+                socket.emit('auth:error', { message: 'Wrong email or password' });
+                return;
+            }
+            socket.emit('auth:success', {
+                user: {
+                    _id: user._id,
+                    email: user.email,
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                },
+            });
+        } catch (error) {
+            console.error('auth:login error:', error);
+            socket.emit('auth:error', { message: 'Server error' });
         }
     });
 

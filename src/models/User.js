@@ -20,6 +20,10 @@ const userSchema = new mongoose.Schema({
         type: Date,
         required: true,
     },
+    password: {
+        type: String,
+        select: false, // scrypt hash "salt:hash" — never sent to clients
+    },
     age: {
         type: Number,
     },
