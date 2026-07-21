@@ -8,9 +8,13 @@ const { registerCallHandlers } = require('./callHandlers');
 const { registerPushHandlers } = require('./pushHandlers');
 const presence = require('../state/presence');
 const { clearSocketBuckets } = require('../utils/rateLimiter');
+const { logSocketEvent } = require('../utils/eventLogger');
 
 const registerSocketHandlers = (io, socket) => {
     console.log('User connected:', socket.id, socket.userId ? `(userId=${socket.userId})` : '');
+
+    // Human-readable log line for every incoming event (see utils/eventLogger).
+    socket.onAny((event, payload) => logSocketEvent(socket, event, payload));
 
     registerAuthHandlers(io, socket);
     registerPresenceHandlers(io, socket);
