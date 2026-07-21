@@ -1,6 +1,7 @@
 const Conversation = require('../models/Conversation');
 const User = require('../models/User');
 const { requireAuth } = require('../middleware/socketAuth');
+const presence = require('../state/presence');
 
 const dmKeyFor = (a, b) => [String(a), String(b)].sort().join('_');
 
@@ -26,13 +27,21 @@ const registerConversationHandlers = (io, socket) => {
             let conversation = await Conversation.findOne({ dmKey }).populate('participants', populateFields);
             let isNew = false;
             if (!conversation) {
-                conversation = await Conversation.create({
-                    participants: [socket.userId, otherUserId],
-                    isGroup: false,
-                    dmKey,
-                });
+                try {
+                    conversation = await Conversation.create({
+                        participants: [socket.userId, otherUserId],
+                        isGroup: false,
+                        dmKey,
+                    });
+                    isNew = true;
+                } catch (error) {
+                    // Both sides opened the DM at once — the unique dmKey index rejected
+                    // the second insert; fall back to the winner's document.
+                    if (error?.code !== 11000) throw error;
+                    conversation = await Conversation.findOne({ dmKey });
+                    if (!conversation) throw error;
+                }
                 conversation = await conversation.populate('participants', populateFields);
-                isNew = true;
             }
             socket.join(String(conversation._id));
             if (isNew) {
@@ -108,7 +117,12 @@ const registerConversationHandlers = (io, socket) => {
             conversation.participants = conversation.participants.filter((id) => String(id) !== String(userId));
             conversation.admins = conversation.admins.filter((id) => String(id) !== String(userId));
             await conversation.save();
+            for (const socketId of presence.getSockets(userId)) {
+                const memberSocket = io.sockets.sockets.get(socketId);
+                if (memberSocket) memberSocket.leave(String(conversation._id));
+            }
             io.to(String(conversation._id)).emit('conversation:member-removed', { conversationId, userId });
+            io.to(`user:${userId}`).emit('conversation:member-removed', { conversationId, userId });
             if (typeof ack === 'function') ack({ ok: true });
         } catch (error) {
             console.error('conversation:remove-member error:', error);

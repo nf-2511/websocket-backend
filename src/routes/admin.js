@@ -3,6 +3,7 @@ const User = require('../models/User');
 const Report = require('../models/Report');
 const Message = require('../models/Message');
 const { requireAuth, requireAdmin } = require('../middleware/requireAdmin');
+const { escapeRegex } = require('../utils/auth');
 
 const router = express.Router();
 router.use(requireAuth, requireAdmin);
@@ -11,8 +12,9 @@ router.get('/users', async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const limit = 50;
     const search = (req.query.search || '').trim();
-    const filter = search
-        ? { $or: [{ firstName: new RegExp(search, 'i') }, { lastName: new RegExp(search, 'i') }, { email: new RegExp(search, 'i') }] }
+    const regex = search ? new RegExp(escapeRegex(search), 'i') : null;
+    const filter = regex
+        ? { $or: [{ firstName: regex }, { lastName: regex }, { email: regex }] }
         : {};
     const [users, total] = await Promise.all([
         User.find(filter).select('-password').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit),

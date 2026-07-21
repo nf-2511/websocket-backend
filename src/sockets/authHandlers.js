@@ -3,6 +3,7 @@ const { sendOTPEmail } = require('../services/emailService');
 const { signToken } = require('../services/tokenService');
 const { normalizeEmail, generateOTP, hashPassword, verifyPassword } = require('../utils/auth');
 const { otpStore, OTP_MAX_ATTEMPTS } = require('../state/otpStore');
+const { rateLimited } = require('../utils/rateLimiter');
 
 const publicUser = (user) => ({
     _id: user._id,
@@ -22,7 +23,10 @@ const succeed = (socket, user) => {
 };
 
 const registerAuthHandlers = (io, socket) => {
-    socket.on('auth:check-email', async (payload) => {
+    // Per-socket sliding-window limits: slows credential stuffing / OTP spam on one
+    // connection. An attacker can still reconnect for a fresh bucket — an IP-keyed
+    // limiter would close that, but needs shared state; out of scope for now.
+    socket.on('auth:check-email', rateLimited(socket, 'auth:check-email', { max: 3, windowMs: 60000 }, async (payload) => {
         const email = normalizeEmail(payload?.email);
         if (!email || !email.endsWith('@gmail.com')) {
             socket.emit('auth:error', { message: 'Only @gmail.com emails are allowed' });
@@ -52,9 +56,9 @@ const registerAuthHandlers = (io, socket) => {
             console.error('auth:check-email error:', error);
             socket.emit('auth:error', { message: 'Server error' });
         }
-    });
+    }));
 
-    socket.on('auth:register', async ({ email, firstName, lastName, birthDate, password } = {}) => {
+    socket.on('auth:register', rateLimited(socket, 'auth:register', { max: 3, windowMs: 60000 }, async ({ email, firstName, lastName, birthDate, password } = {}) => {
         const normEmail = normalizeEmail(email);
         if (!normEmail.endsWith('@gmail.com')) {
             socket.emit('auth:error', { message: 'Only @gmail.com emails are allowed' });
@@ -79,9 +83,9 @@ const registerAuthHandlers = (io, socket) => {
             const message = error?.code === 11000 ? 'Email already registered' : 'Registration failed';
             socket.emit('auth:error', { message });
         }
-    });
+    }));
 
-    socket.on('auth:login', async ({ email, password } = {}) => {
+    socket.on('auth:login', rateLimited(socket, 'auth:login', { max: 5, windowMs: 60000 }, async ({ email, password } = {}) => {
         const normEmail = normalizeEmail(email);
         if (!normEmail || !password) {
             socket.emit('auth:error', { message: 'Email and password are required' });
@@ -102,9 +106,9 @@ const registerAuthHandlers = (io, socket) => {
             console.error('auth:login error:', error);
             socket.emit('auth:error', { message: 'Server error' });
         }
-    });
+    }));
 
-    socket.on('auth:verify-otp', async (payload) => {
+    socket.on('auth:verify-otp', rateLimited(socket, 'auth:verify-otp', { max: 10, windowMs: 60000 }, async (payload) => {
         const email = normalizeEmail(payload?.email);
         const code = payload?.code;
         const record = otpStore.get(email);
@@ -130,13 +134,17 @@ const registerAuthHandlers = (io, socket) => {
                 socket.emit('auth:error', { message: 'User not found. Please register' });
                 return;
             }
+            if (user.banned) {
+                socket.emit('auth:error', { message: 'This account has been banned' });
+                return;
+            }
             otpStore.delete(email);
             succeed(socket, user);
         } catch (error) {
             console.error('auth:verify-otp error:', error);
             socket.emit('auth:error', { message: 'Server error' });
         }
-    });
+    }));
 
     // Client publishes its ECDH public key (base64 SPKI) for E2E-encrypted DMs.
     socket.on('keys:publish', async ({ publicKey } = {}) => {

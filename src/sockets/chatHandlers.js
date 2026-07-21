@@ -21,7 +21,16 @@ const registerChatHandlers = (io, socket) => {
         rateLimited(socket, 'message:send', { max: 30, windowMs: 10000 }, async (payload = {}, ack) => {
             if (requireAuth(socket, 'message:send')) return;
             const { conversationId, text, encrypted, iv, attachments, replyTo } = payload;
-            if (!conversationId || (!text && !(attachments || []).length)) return;
+            const sanitized = (Array.isArray(attachments) ? attachments : [])
+                .slice(0, 10)
+                .filter((a) => a && typeof a === 'object' && typeof a.url === 'string' && a.url.startsWith('/uploads/'))
+                .map((a) => ({
+                    url: a.url,
+                    name: String(a.name || '').slice(0, 200),
+                    type: String(a.type || '').slice(0, 100),
+                    size: Number(a.size) || 0,
+                }));
+            if (!conversationId || (!text && !sanitized.length)) return;
 
             try {
                 const conversation = await assertMember(conversationId, socket.userId);
@@ -33,7 +42,7 @@ const registerChatHandlers = (io, socket) => {
                     text: text || '',
                     encrypted: !!encrypted,
                     iv: iv || '',
-                    attachments: attachments || [],
+                    attachments: sanitized,
                     replyTo: replyTo || null,
                 });
 
@@ -43,7 +52,7 @@ const registerChatHandlers = (io, socket) => {
                 await conversation.save();
 
                 const populated = await message.populate('senderId', '_id firstName lastName email');
-                io.to(String(conversationId)).emit('message:receive', { message: populated });
+                io.to(conversation.participants.map((id) => `user:${String(id)}`)).emit('message:receive', { message: populated });
                 if (typeof ack === 'function') ack({ message: populated });
 
                 // Legacy DM contact-list sidebar push + push notification for offline recipients.
@@ -99,6 +108,9 @@ const registerChatHandlers = (io, socket) => {
             if (!message || String(message.senderId) !== socket.userId || message.deletedAt) {
                 return typeof ack === 'function' && ack({ error: 'Cannot edit' });
             }
+            if (message.encrypted) {
+                return typeof ack === 'function' && ack({ error: 'Cannot edit an encrypted message' });
+            }
             message.text = text || '';
             message.editedAt = new Date();
             await message.save();
@@ -139,6 +151,7 @@ const registerChatHandlers = (io, socket) => {
         try {
             const message = await Message.findById(messageId);
             if (!message) return;
+            if (!(await assertMember(message.conversationId, socket.userId))) return;
             message.reactions = message.reactions.filter((r) => String(r.userId) !== socket.userId);
             message.reactions.push({ userId: socket.userId, emoji });
             await message.save();
@@ -156,6 +169,7 @@ const registerChatHandlers = (io, socket) => {
         try {
             const message = await Message.findById(messageId);
             if (!message) return;
+            if (!(await assertMember(message.conversationId, socket.userId))) return;
             message.reactions = message.reactions.filter((r) => String(r.userId) !== socket.userId);
             await message.save();
             io.to(String(message.conversationId)).emit('message:reacted', {
@@ -172,16 +186,17 @@ const registerChatHandlers = (io, socket) => {
         try {
             const message = await Message.findById(messageId);
             if (!message || String(message.conversationId) !== String(conversationId)) return;
+            if (!(await assertMember(message.conversationId, socket.userId))) return;
             if (!message.readBy.some((r) => String(r.userId) === socket.userId)) {
                 message.readBy.push({ userId: socket.userId, readAt: new Date() });
                 await message.save();
+                socket.to(conversationId).emit('message:read-receipt', {
+                    conversationId,
+                    messageId,
+                    userId: socket.userId,
+                    readAt: new Date(),
+                });
             }
-            socket.to(conversationId).emit('message:read-receipt', {
-                conversationId,
-                messageId,
-                userId: socket.userId,
-                readAt: new Date(),
-            });
         } catch (error) {
             console.error('message:read error:', error);
         }

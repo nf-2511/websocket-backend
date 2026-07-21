@@ -35,7 +35,7 @@ app.use(cors({ origin: '*' }));
 app.use('/uploads', express.static(UPLOAD_DIR));
 
 app.get('/', (req, res) => {
-    res.json({ status: 'ok', service: 'mars-chat-backend', rev: 6 });
+    res.json({ status: 'ok', service: 'mars-chat-backend', rev: 7 });
 });
 
 app.use('/api/upload', uploadRoutes);

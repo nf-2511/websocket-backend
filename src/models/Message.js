@@ -32,7 +32,10 @@ const messageSchema = new mongoose.Schema(
                 {
                     url: String,
                     name: String,
-                    type: String, // mime type
+                    // Mime type. Must be `{ type: String }`: a bare `type: String` here makes
+                    // Mongoose read the whole element definition as "array of String", which
+                    // rejects every attachment object with a CastError.
+                    type: { type: String },
                     size: Number,
                 },
             ],
