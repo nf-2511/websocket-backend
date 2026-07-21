@@ -51,12 +51,13 @@ const registerContactsHandlers = (io, socket) => {
         }
     });
 
-    socket.on('users:search', async ({ query } = {}) => {
-        if (requireAuth(socket, 'users:search')) return;
-        if (!query || query.trim().length < 1) {
-            socket.emit('users:search-result', []);
-            return;
-        }
+    socket.on('users:search', async ({ query } = {}, ack) => {
+        const respond = (payload) => {
+            if (typeof ack === 'function') ack(payload);
+            else socket.emit('users:search-result', payload);
+        };
+        if (requireAuth(socket, 'users:search')) return respond([]);
+        if (!query || query.trim().length < 1) return respond([]);
         try {
             const me = await User.findById(socket.userId).select('blockedUsers');
             const regex = new RegExp(escapeRegex(query.trim()), 'i');
@@ -68,10 +69,10 @@ const registerContactsHandlers = (io, socket) => {
                 .select('_id firstName lastName email age avatarUrl')
                 .sort({ createdAt: -1 })
                 .limit(20);
-            socket.emit('users:search-result', users);
+            respond(users);
         } catch (error) {
             console.error('users:search error:', error);
-            socket.emit('users:search-result', []);
+            respond([]);
         }
     });
 };
