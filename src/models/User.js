@@ -37,6 +37,43 @@ const userSchema = new mongoose.Schema({
         ref: 'User',
         default: [],
     },
+    role: {
+        type: String,
+        enum: ['user', 'admin'],
+        default: 'user',
+    },
+    banned: {
+        type: Boolean,
+        default: false,
+    },
+    blockedUsers: {
+        type: [mongoose.Schema.Types.ObjectId],
+        ref: 'User',
+        default: [],
+    },
+    avatarUrl: {
+        type: String,
+        default: '',
+    },
+    bio: {
+        type: String,
+        default: '',
+        maxlength: 280,
+    },
+    // Base64 SPKI-exported ECDH (P-256) public key, published by the client for E2E-encrypted DMs.
+    publicKey: {
+        type: String,
+        default: '',
+    },
+    pushSubscriptions: {
+        type: [
+            {
+                endpoint: String,
+                keys: { p256dh: String, auth: String },
+            },
+        ],
+        default: [],
+    },
 }, { timestamps: true });
 
 // Keep age in sync with birthDate
